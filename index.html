@@ -1,0 +1,192 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Enterprise Org Chart Builder</title>
+    <meta name="description" content="A premium, self-hosted, lightweight organizational chart builder for companies. Export high-res PNG and SVG images instantly.">
+    <!-- Google Fonts -->
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;500;600;700&family=Plus+Jakarta+Sans:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+    <!-- FontAwesome for Premium Icons -->
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+    <!-- Main Style Sheet -->
+    <link rel="stylesheet" href="style.css">
+    <!-- D3 and d3-org-chart dependencies -->
+    <script src="https://d3js.org/d3.v7.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/d3-flextree@2.1.2/build/d3-flextree.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/d3-org-chart@3"></script>
+    <!-- html2canvas for high-res layout-preserved image exports -->
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/html2canvas/1.4.1/html2canvas.min.js"></script>
+</head>
+<body>
+    <!-- Global Error Banner for debugging local runtime/CDN failures -->
+    <div id="error-boundary-banner" style="display:none; background-color:#ef4444; color:white; padding:14px 24px; font-family:var(--font-heading); font-size:14px; position:absolute; top:0; left:0; right:0; z-index:9999; justify-content:space-between; align-items:center; box-shadow:var(--shadow-lg);">
+        <div style="display:flex; align-items:center; gap:10px;">
+            <i class="fa-solid fa-circle-exclamation" style="font-size:18px;"></i>
+            <span id="error-boundary-msg">An error occurred while loading the application.</span>
+        </div>
+        <button onclick="document.getElementById('error-boundary-banner').style.display='none'" style="background:none; border:1px solid rgba(255,255,255,0.4); color:white; padding:6px 12px; border-radius:6px; cursor:pointer; font-weight:600; font-size:12px; transition:all 0.2s;">Dismiss</button>
+    </div>
+
+    <div class="app-container">
+        <!-- Sidebar: Editor & Controls -->
+        <aside class="sidebar">
+            <header class="sidebar-header">
+                <div class="logo">
+                    <i class="fa-solid fa-sitemap logo-icon"></i>
+                    <h1>OrgChart <span class="accent">Studio</span></h1>
+                </div>
+                <p class="subtitle">Quickly model & export your team layout</p>
+            </header>
+
+            <nav class="tabs">
+                <button class="tab-btn active" id="tab-data" onclick="switchTab('data')">
+                    <i class="fa-solid fa-code"></i> JSON Data
+                </button>
+                <button class="tab-btn" id="tab-config" onclick="switchTab('config')">
+                    <i class="fa-solid fa-sliders"></i> Layout Settings
+                </button>
+            </nav>
+
+            <!-- Tab Content: JSON Data Editor -->
+            <div class="tab-content active" id="content-data">
+                <div class="editor-actions">
+                    <span class="status-indicator valid" id="json-status">
+                        <i class="fa-solid fa-circle-check"></i> Valid JSON
+                    </span>
+                    <div class="btn-group">
+                        <button onclick="formatJSON()" title="Format JSON Code" class="icon-btn">
+                            <i class="fa-solid fa-align-left"></i>
+                        </button>
+                        <button onclick="resetToSample()" title="Reset to Sample Data" class="icon-btn danger">
+                            <i class="fa-solid fa-rotate-left"></i>
+                        </button>
+                    </div>
+                </div>
+                <div class="textarea-wrapper">
+                    <textarea id="json-input" spellcheck="false" placeholder="Paste your org data here..."></textarea>
+                </div>
+                <div class="file-operations">
+                    <button class="btn btn-secondary" onclick="triggerFileInput()">
+                        <i class="fa-solid fa-file-import"></i> Import JSON
+                    </button>
+                    <input type="file" id="file-input" accept=".json" style="display: none;" onchange="handleFileImport(event)">
+                    <button class="btn btn-secondary" onclick="exportJSONFile()">
+                        <i class="fa-solid fa-file-export"></i> Export JSON
+                    </button>
+                </div>
+            </div>
+
+            <!-- Tab Content: Config Options -->
+            <div class="tab-content" id="content-config">
+                <div class="config-group">
+                    <label class="config-label">Chart Orientation</label>
+                    <div class="radio-grid">
+                        <label class="radio-card">
+                            <input type="radio" name="orientation" value="top" checked onchange="updateConfig()">
+                            <span class="radio-content">
+                                <i class="fa-solid fa-arrow-down"></i> Top-Down
+                            </span>
+                        </label>
+                        <label class="radio-card">
+                            <input type="radio" name="orientation" value="bottom" onchange="updateConfig()">
+                            <span class="radio-content">
+                                <i class="fa-solid fa-arrow-up"></i> Bottom-Up
+                            </span>
+                        </label>
+                        <label class="radio-card">
+                            <input type="radio" name="orientation" value="left" onchange="updateConfig()">
+                            <span class="radio-content">
+                                <i class="fa-solid fa-arrow-right"></i> Left-Right
+                            </span>
+                        </label>
+                        <label class="radio-card">
+                            <input type="radio" name="orientation" value="right" onchange="updateConfig()">
+                            <span class="radio-content">
+                                <i class="fa-solid fa-arrow-left"></i> Right-Left
+                            </span>
+                        </label>
+                    </div>
+                </div>
+
+                <div class="config-group">
+                    <label class="config-label" for="export-scale">Export Image Quality</label>
+                    <select id="export-scale" class="form-select" onchange="updateConfig()">
+                        <option value="1">Standard (1x)</option>
+                        <option value="2" selected>Retina / High-Res (2x)</option>
+                        <option value="3">Ultra HD / Print (3x)</option>
+                    </select>
+                </div>
+
+                <div class="config-group">
+                    <label class="config-label" for="theme-color">Node Accent Theme</label>
+                    <div class="theme-picker">
+                        <button class="theme-dot active" style="background-color: #4f46e5;" onclick="changeTheme('#4f46e5', this)"></button>
+                        <button class="theme-dot" style="background-color: #0ea5e9;" onclick="changeTheme('#0ea5e9', this)"></button>
+                        <button class="theme-dot" style="background-color: #10b981;" onclick="changeTheme('#10b981', this)"></button>
+                        <button class="theme-dot" style="background-color: #f59e0b;" onclick="changeTheme('#f59e0b', this)"></button>
+                        <button class="theme-dot" style="background-color: #ec4899;" onclick="changeTheme('#ec4899', this)"></button>
+                    </div>
+                </div>
+
+                <div class="config-group">
+                    <label class="config-label">Card Size</label>
+                    <div class="range-wrapper">
+                        <input type="range" id="node-width" min="200" max="320" value="260" step="10" oninput="updateConfig()">
+                        <span class="range-val" id="node-width-val">260px</span>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Export Panel -->
+            <footer class="sidebar-footer">
+                <button class="btn btn-primary btn-block" onclick="exportPNG()">
+                    <i class="fa-solid fa-image"></i> Export High-Res PNG
+                </button>
+                <button class="btn btn-outline btn-block" onclick="exportSVG()">
+                    <i class="fa-solid fa-file-code"></i> Export SVG Vector
+                </button>
+            </footer>
+        </aside>
+
+        <!-- Main Display Pane -->
+        <main class="chart-pane">
+            <!-- Floating Navigation Controls -->
+            <div class="floating-controls">
+                <div class="search-box">
+                    <i class="fa-solid fa-magnifying-glass search-icon"></i>
+                    <input type="text" id="search-input" placeholder="Search team member..." oninput="handleSearch(this.value)">
+                </div>
+                
+                <div class="zoom-controls">
+                    <button class="control-btn" onclick="zoomIn()" title="Zoom In">
+                        <i class="fa-solid fa-plus"></i>
+                    </button>
+                    <button class="control-btn" onclick="zoomOut()" title="Zoom Out">
+                        <i class="fa-solid fa-minus"></i>
+                    </button>
+                    <button class="control-btn" onclick="fitChart()" title="Fit Screen">
+                        <i class="fa-solid fa-expand"></i>
+                    </button>
+                    <button class="control-btn" onclick="toggleExpandAll()" id="expand-all-btn" title="Expand/Collapse All">
+                        <i class="fa-solid fa-network-wired"></i>
+                    </button>
+                </div>
+            </div>
+
+            <!-- Chart Canvas Container -->
+            <div id="chart-container" class="chart-container"></div>
+            
+            <div class="empty-state" id="empty-state" style="display: none;">
+                <i class="fa-solid fa-folder-open empty-icon"></i>
+                <h3>No Valid Chart Data</h3>
+                <p>Ensure your JSON file contains objects with unique 'id' values and valid hierarchy links.</p>
+            </div>
+        </main>
+    </div>
+    
+    <script src="app.js"></script>
+</body>
+</html>
