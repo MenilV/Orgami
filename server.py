@@ -2,6 +2,7 @@ import http.server
 import urllib.request
 import urllib.parse
 import sys
+import os
 
 class ProxyHTTPRequestHandler(http.server.SimpleHTTPRequestHandler):
     def end_headers(self):
@@ -52,10 +53,14 @@ if __name__ == '__main__':
     port = 8080
     if len(sys.argv) > 1:
         port = int(sys.argv[1])
-    
-    server_address = ('', port)
+
+    # Bind address defaults to all interfaces for easy local self-hosting; set
+    # HOST=127.0.0.1 when running behind a reverse proxy so the port isn't
+    # exposed directly.
+    host = os.environ.get('HOST', '')
+    server_address = (host, port)
     httpd = http.server.HTTPServer(server_address, ProxyHTTPRequestHandler)
-    print(f"Serving and proxying org chart tool on port {port}...")
+    print(f"Serving and proxying org chart tool on {host or '0.0.0.0'}:{port}...")
     try:
         httpd.serve_forever()
     except KeyboardInterrupt:
