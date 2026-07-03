@@ -495,47 +495,260 @@ function handleSearch(val) {
     }
 }
 
+// Export background color (matches the chart pane) used for both PNG and SVG.
+const EXPORT_BG_COLOR = '#f8fafc';
+const SVG_NS = 'http://www.w3.org/2000/svg';
+const EXPORT_FONT = "'Plus Jakarta Sans','Outfit',system-ui,-apple-system,'Segoe UI',Roboto,Helvetica,Arial,sans-serif";
+
+// Helper: create a namespaced SVG element with attributes (and optional text).
+function svgEl(tag, attrs, text) {
+    const el = document.createElementNS(SVG_NS, tag);
+    for (const k in attrs) el.setAttribute(k, attrs[k]);
+    if (text != null) el.textContent = text;
+    return el;
+}
+
+// Truncate text with an ellipsis so it fits inside maxWidth for the given font.
+const _measureCtx = document.createElement('canvas').getContext('2d');
+function fitText(text, cssFont, maxWidth) {
+    _measureCtx.font = cssFont;
+    if (_measureCtx.measureText(text).width <= maxWidth) return text;
+    let t = text;
+    while (t.length > 1 && _measureCtx.measureText(t + '…').width > maxWidth) {
+        t = t.slice(0, -1);
+    }
+    return t + '…';
+}
+
+// Render one org-chart card using NATIVE SVG primitives (rect/image/text) rather
+// than HTML in a <foreignObject>. foreignObject is only reliably rendered by
+// Chromium — Preview/Quick Look, Safari, Illustrator, Figma, Inkscape and
+// librsvg all drop or mangle it — so native shapes are what make the exported
+// SVG portable across viewers. Appends the card into `group` (a <g class="node">
+// positioned in the chart's coordinate space) and any clip defs into `defs`.
+function renderNativeCard(group, defs, idx, rec, W, H, accent, base64Image) {
+    const PAD = 16;
+    const name = rec.name || 'Unknown Name';
+    const role = rec.role || 'Staff Member';
+    const department = rec.department || 'General';
+    const reports = currentData.filter(item => item.parentId === rec.id).length;
+
+    // Card background + rounded-corner clip (used to round the accent bar).
+    const clipId = `cardclip-${idx}`;
+    const clip = svgEl('clipPath', { id: clipId });
+    clip.appendChild(svgEl('rect', { x: 0, y: 0, width: W, height: H, rx: 12, ry: 12 }));
+    defs.appendChild(clip);
+
+    group.appendChild(svgEl('rect', {
+        x: 0.5, y: 0.5, width: W - 1, height: H - 1, rx: 12, ry: 12,
+        fill: '#ffffff', stroke: '#e2e8f0', 'stroke-width': 1, filter: 'url(#cardShadow)'
+    }));
+    // Accent bar across the top, clipped to the card's rounded corners.
+    group.appendChild(svgEl('rect', {
+        x: 0, y: 0, width: W, height: 6, fill: accent, 'clip-path': `url(#${clipId})`
+    }));
+
+    // Avatar (48x48 circle) at the top-left of the header.
+    const avX = PAD, avY = PAD + 4, avR = 24;
+    const cx = avX + avR, cy = avY + avR;
+    if (base64Image) {
+        const avClipId = `avclip-${idx}`;
+        const avClip = svgEl('clipPath', { id: avClipId });
+        avClip.appendChild(svgEl('circle', { cx, cy, r: avR }));
+        defs.appendChild(avClip);
+        group.appendChild(svgEl('image', {
+            x: avX, y: avY, width: 48, height: 48,
+            href: base64Image, preserveAspectRatio: 'xMidYMid slice',
+            'clip-path': `url(#${avClipId})`
+        }));
+        group.appendChild(svgEl('circle', { cx, cy, r: avR - 1, fill: 'none', stroke: '#ffffff', 'stroke-width': 2 }));
+    } else {
+        const initials = name.split(' ').map(n => n[0] || '').join('').substring(0, 2).toUpperCase();
+        group.appendChild(svgEl('circle', { cx, cy, r: avR, fill: 'url(#initialsGrad)', stroke: '#ffffff', 'stroke-width': 2 }));
+        group.appendChild(svgEl('text', {
+            x: cx, y: cy, 'text-anchor': 'middle', 'dominant-baseline': 'central',
+            'font-family': EXPORT_FONT, 'font-size': 16, 'font-weight': 600, fill: '#475569'
+        }, initials));
+    }
+
+    // Name + role, to the right of the avatar.
+    const textX = avX + 48 + 12;
+    const textMaxW = W - textX - PAD;
+    group.appendChild(svgEl('text', {
+        x: textX, y: cy - 4, 'font-family': EXPORT_FONT, 'font-size': 14, 'font-weight': 600, fill: '#0f172a'
+    }, fitText(name, `600 14px ${EXPORT_FONT}`, textMaxW)));
+    group.appendChild(svgEl('text', {
+        x: textX, y: cy + 12, 'font-family': EXPORT_FONT, 'font-size': 11, 'font-weight': 500, fill: '#475569'
+    }, fitText(role, `500 11px ${EXPORT_FONT}`, textMaxW)));
+
+    // Footer: top divider, department chip (left), reports count (right).
+    const lineY = H - 34;
+    const chipCY = H - 20;
+    group.appendChild(svgEl('line', { x1: PAD, y1: lineY, x2: W - PAD, y2: lineY, stroke: '#f1f5f9', 'stroke-width': 1 }));
+
+    const deptText = department.toUpperCase();
+    _measureCtx.font = `600 10px ${EXPORT_FONT}`;
+    const chipW = Math.ceil(_measureCtx.measureText(deptText).width) + 16;
+    group.appendChild(svgEl('rect', { x: PAD, y: chipCY - 9, width: chipW, height: 18, rx: 4, ry: 4, fill: '#f1f5f9' }));
+    group.appendChild(svgEl('text', {
+        x: PAD + 8, y: chipCY, 'dominant-baseline': 'central',
+        'font-family': EXPORT_FONT, 'font-size': 10, 'font-weight': 600, fill: '#475569',
+        'letter-spacing': 0.3
+    }, deptText));
+
+    if (reports > 0) {
+        const reportsStr = reports === 1 ? '1 Report' : `${reports} Reports`;
+        group.appendChild(svgEl('text', {
+            x: W - PAD, y: chipCY, 'text-anchor': 'end', 'dominant-baseline': 'central',
+            'font-family': EXPORT_FONT, 'font-size': 10, 'font-weight': 500, fill: '#475569'
+        }, reportsStr));
+    }
+}
+
+// Build a fully self-contained, PORTABLE SVG string of the ENTIRE chart. Each
+// node is redrawn with native SVG primitives and avatars are embedded as Base64,
+// so the file renders identically in any viewer (not just Chromium). Shared by
+// both the SVG and PNG exports so they always match the on-screen chart.
+async function buildExportSVG() {
+    const svgElement = document.querySelector('#chart-container svg');
+    if (!svgElement) throw new Error("Chart SVG element not found");
+
+    // d3-org-chart applies pan/zoom to the top-level <g class="chart"> group.
+    // Measure the untransformed bounding box of ALL content so the export covers
+    // the whole tree regardless of the current zoom/scroll position on screen.
+    const contentGroup = svgElement.querySelector('g.chart') || svgElement.querySelector('g');
+    if (!contentGroup) throw new Error("Chart content group not found");
+    const bbox = contentGroup.getBBox();
+
+    const PAD = 40;
+    const width = Math.ceil(bbox.width + PAD * 2);
+    const height = Math.ceil(bbox.height + PAD * 2);
+
+    // Clone so we never mutate the live chart.
+    const svgClone = svgElement.cloneNode(true);
+    svgClone.setAttribute('xmlns', SVG_NS);
+    svgClone.setAttribute('xmlns:xlink', 'http://www.w3.org/1999/xlink');
+    svgClone.setAttribute('width', width);
+    svgClone.setAttribute('height', height);
+    svgClone.setAttribute('viewBox', `0 0 ${width} ${height}`);
+    svgClone.removeAttribute('font-family');
+    svgClone.style.removeProperty('width');
+    svgClone.style.removeProperty('height');
+
+    // Normalize the content transform so the top-left of the tree sits at (PAD, PAD).
+    const clonedGroup = svgClone.querySelector('g.chart') || svgClone.querySelector('g');
+    clonedGroup.setAttribute('transform', `translate(${PAD - bbox.x}, ${PAD - bbox.y})`);
+
+    // Strip interactive UI chrome (expand/collapse buttons).
+    svgClone.querySelectorAll('.node-button-g, .node-button-foreign-object').forEach(el => el.remove());
+
+    // Shared defs: soft card shadow + the initials-avatar gradient.
+    const defs = svgEl('defs', {});
+    const shadow = svgEl('filter', { id: 'cardShadow', x: '-20%', y: '-20%', width: '140%', height: '140%' });
+    shadow.appendChild(svgEl('feDropShadow', { dx: 0, dy: 6, stdDeviation: 6, 'flood-color': '#000000', 'flood-opacity': 0.06 }));
+    defs.appendChild(shadow);
+    const grad = svgEl('linearGradient', { id: 'initialsGrad', x1: 0, y1: 0, x2: 1, y2: 1 });
+    grad.appendChild(svgEl('stop', { offset: '0%', 'stop-color': '#e2e8f0' }));
+    grad.appendChild(svgEl('stop', { offset: '100%', 'stop-color': '#cbd5e1' }));
+    defs.appendChild(grad);
+
+    // Recolor the connector links (d3-org-chart draws them as native <path>s).
+    svgClone.querySelectorAll('path.link').forEach(p => {
+        p.setAttribute('fill', 'none');
+        p.setAttribute('stroke', '#cbd5e1');
+        p.setAttribute('stroke-width', 2);
+        p.removeAttribute('display');
+    });
+
+    // Redraw each node with native primitives. Live and cloned node lists share
+    // the same order, so we read data/positions from the live node and mutate the
+    // matching clone. Avatar images are converted to Base64 up front.
+    const liveNodes = svgElement.querySelectorAll('g.node');
+    const cloneNodes = svgClone.querySelectorAll('g.node');
+    const cards = await Promise.all(Array.from(liveNodes).map(async (liveNode) => {
+        const datum = d3.select(liveNode).datum() || {};
+        const rec = datum.data || {};
+        const rect = liveNode.querySelector('.node-rect');
+        const W = rect ? parseFloat(rect.getAttribute('width')) : 260;
+        const H = rect ? parseFloat(rect.getAttribute('height')) : 110;
+        const imgEl = liveNode.querySelector('img');
+        const base64Image = imgEl ? await urlToBase64(imgEl.src) : '';
+        return { rec, W, H, base64Image };
+    }));
+
+    cloneNodes.forEach((cloneNode, idx) => {
+        // Remove the HTML-based content; keep the <g> and its positioning transform.
+        cloneNode.querySelectorAll('foreignObject, .node-rect').forEach(el => el.remove());
+        cloneNode.removeAttribute('style');
+        const { rec, W, H, base64Image } = cards[idx];
+        renderNativeCard(cloneNode, defs, idx, rec, W, H, currentThemeAccent, base64Image);
+    });
+
+    svgClone.insertBefore(defs, svgClone.firstChild);
+
+    // Solid background rect so the exported chart isn't transparent.
+    svgClone.insertBefore(svgEl('rect', { x: 0, y: 0, width, height, fill: EXPORT_BG_COLOR }), svgClone.firstChild);
+
+    const serializer = new XMLSerializer();
+    let svgString = serializer.serializeToString(svgClone);
+    if (!svgString.startsWith('<?xml')) {
+        svgString = '<?xml version="1.0" standalone="no"?>\r\n' + svgString;
+    }
+
+    return { svgString, width, height };
+}
+
 // Export Commands
-function exportPNG() {
+async function exportPNG() {
     if (!chart) return;
-    const scale = parseInt(document.getElementById('export-scale').value);
-    
-    // Smooth loading indicator during canvas rendering
+    const scale = parseInt(document.getElementById('export-scale').value) || 2;
+
     const exportBtn = document.querySelector('button[onclick="exportPNG()"]');
     const originalText = exportBtn.innerHTML;
     exportBtn.innerHTML = '<i class="fa-solid fa-spinner fa-spin"></i> Exporting PNG...';
     exportBtn.disabled = true;
 
-    // Reset zoom before export to capture everything cleanly
-    chart.fit();
-    
-    // Let layout transition settle, then trigger D3 native export
-    setTimeout(() => {
-        try {
-            chart.exportImg({
-                full: true,
-                scale: scale,
-                backgroundColor: '#f8fafc',
-                onLoad: () => {
-                    exportBtn.innerHTML = originalText;
-                    exportBtn.disabled = false;
-                }
-            });
-        } catch (err) {
-            console.error("PNG Export failed:", err);
-            alert("PNG Export failed: " + err.message);
-            exportBtn.innerHTML = originalText;
-            exportBtn.disabled = false;
-        }
+    try {
+        const { svgString, width, height } = await buildExportSVG();
 
-        // Safety fallback: re-enable button after 3 seconds in case onLoad is not fired by this version of the library
-        setTimeout(() => {
-            if (exportBtn.disabled) {
-                exportBtn.innerHTML = originalText;
-                exportBtn.disabled = false;
-            }
-        }, 3000);
-    }, 500);
+        // Rasterize the self-contained SVG onto a canvas at the chosen scale.
+        const dataUrl = 'data:image/svg+xml;charset=utf-8,' + encodeURIComponent(svgString);
+        await new Promise((resolve, reject) => {
+            const img = new Image();
+            img.onload = () => {
+                try {
+                    const canvas = document.createElement('canvas');
+                    canvas.width = Math.max(1, Math.round(width * scale));
+                    canvas.height = Math.max(1, Math.round(height * scale));
+                    const ctx = canvas.getContext('2d');
+                    ctx.fillStyle = EXPORT_BG_COLOR;
+                    ctx.fillRect(0, 0, canvas.width, canvas.height);
+                    ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
+
+                    canvas.toBlob((blob) => {
+                        if (!blob) { reject(new Error("Canvas could not be encoded to PNG")); return; }
+                        const url = URL.createObjectURL(blob);
+                        const link = document.createElement('a');
+                        link.download = `org-chart-${new Date().toISOString().slice(0, 10)}.png`;
+                        link.href = url;
+                        link.click();
+                        URL.revokeObjectURL(url);
+                        resolve();
+                    }, 'image/png');
+                } catch (err) {
+                    reject(err);
+                }
+            };
+            img.onerror = () => reject(new Error("Failed to render chart SVG for rasterization"));
+            img.src = dataUrl;
+        });
+    } catch (err) {
+        console.error("PNG Export failed:", err);
+        alert("PNG Export failed: " + err.message);
+    } finally {
+        exportBtn.innerHTML = originalText;
+        exportBtn.disabled = false;
+    }
 }
 
 // Convert Image URL to Base64 (CORS compliant)
@@ -575,141 +788,14 @@ function urlToBase64(url) {
 // Export SVG Vector File (Self-Contained with Base64 Images and Styles)
 async function exportSVG() {
     if (!chart) return;
-    
+
     const exportBtn = document.querySelector('button[onclick="exportSVG()"]');
     const originalText = exportBtn.innerHTML;
     exportBtn.innerHTML = '<i class="fa-solid fa-spinner fa-spin"></i> Exporting SVG...';
     exportBtn.disabled = true;
 
     try {
-        const svgElement = document.querySelector('#chart-container svg');
-        if (!svgElement) throw new Error("SVG element not found");
-
-        // Clone the SVG
-        const svgClone = svgElement.cloneNode(true);
-
-        // Inline critical styles inside the SVG clone so it renders styled on its own
-        const customStyles = `
-            @import url('https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700&display=swap');
-            @import url('https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css');
-            
-            .custom-node {
-                box-sizing: border-box;
-                font-family: 'Plus Jakarta Sans', sans-serif;
-                width: 100%;
-                height: 100%;
-                background-color: #ffffff;
-                border-radius: 12px;
-                border: 1px solid #e2e8f0;
-                box-shadow: 0 10px 15px -3px rgba(0,0,0,0.05);
-                display: flex;
-                flex-direction: column;
-                padding: 16px;
-                position: relative;
-            }
-            .node-accent {
-                position: absolute;
-                top: 0;
-                left: 0;
-                right: 0;
-                height: 6px;
-                border-radius: 12px 12px 0 0;
-            }
-            .node-header {
-                display: flex;
-                align-items: center;
-                gap: 12px;
-                margin-top: 4px;
-            }
-            .node-avatar-container {
-                position: relative;
-            }
-            .node-avatar {
-                width: 48px;
-                height: 48px;
-                border-radius: 50%;
-                object-fit: cover;
-                border: 2px solid #ffffff;
-                box-shadow: 0 1px 3px rgba(0,0,0,0.1);
-            }
-            .node-initials {
-                width: 48px;
-                height: 48px;
-                border-radius: 50%;
-                background: linear-gradient(135deg, #e2e8f0 0%, #cbd5e1 100%);
-                color: #475569;
-                font-weight: 600;
-                font-size: 16px;
-                display: flex;
-                align-items: center;
-                justify-content: center;
-                border: 2px solid #ffffff;
-                box-shadow: 0 1px 3px rgba(0,0,0,0.1);
-            }
-            .node-details {
-                display: flex;
-                flex-direction: column;
-                min-width: 0;
-            }
-            .node-name {
-                font-size: 14px;
-                font-weight: 600;
-                color: #0f172a;
-            }
-            .node-role {
-                font-size: 11px;
-                color: #475569;
-                font-weight: 500;
-            }
-            .node-footer {
-                display: flex;
-                justify-content: space-between;
-                align-items: center;
-                margin-top: auto;
-                padding-top: 10px;
-                border-top: 1px solid #f1f5f9;
-            }
-            .node-dept {
-                font-size: 10px;
-                font-weight: 600;
-                text-transform: uppercase;
-                padding: 2px 8px;
-                border-radius: 4px;
-                background-color: #f1f5f9;
-                color: #475569;
-            }
-            .node-reports {
-                font-size: 10px;
-                color: #475569;
-                font-weight: 500;
-                display: flex;
-                align-items: center;
-                gap: 4px;
-            }
-            .link {
-                stroke: #cbd5e1 !important;
-                stroke-width: 2px !important;
-            }
-        `;
-        
-        const styleElement = document.createElementNS('http://www.w3.org/2000/svg', 'style');
-        styleElement.textContent = customStyles;
-        svgClone.insertBefore(styleElement, svgClone.firstChild);
-
-        // Find all <img> tags inside foreignObjects and convert them to Base64 URLs
-        const images = svgClone.querySelectorAll('img');
-        const conversionPromises = Array.from(images).map(async (img) => {
-            const base64 = await urlToBase64(img.src);
-            img.src = base64;
-        });
-        await Promise.all(conversionPromises);
-
-        // Serialize the SVG clone
-        const serializer = new XMLSerializer();
-        let svgString = serializer.serializeToString(svgClone);
-        if (!svgString.startsWith('<?xml')) {
-            svgString = '<?xml version="1.0" standalone="no"?>\r\n' + svgString;
-        }
+        const { svgString } = await buildExportSVG();
 
         // Trigger file download
         const blob = new Blob([svgString], { type: 'image/svg+xml;charset=utf-8' });
